@@ -1,5 +1,0 @@
-12 June 2026
-1. Add certificate page: Certification cycle should be dropdown: Initial, Recertification, Transfer & Recertification. Change initial audit date to current cycle initial audit date.
-2. Add option to add surveillance & recertification audit information and report.
-3. Add option to renew expiring certificate while keeping old information intact. It should have initial certificate 
-4. Bulk add customer
