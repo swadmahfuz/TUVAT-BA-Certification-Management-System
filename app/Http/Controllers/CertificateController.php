@@ -23,7 +23,7 @@ use Maatwebsite\Excel\Facades\Excel;
 | Developed by: Swad Ahmed Mahfuz (Head of Divison - Business Assurance & Training, Bangladesh)
 | Contact: swad.mahfuz@gmail.com, +1-725-867-7718, +88 01733 023 008
 | Project Start: 12 October 2022
-| Latest Stable Release: v3.4.2 -  10 June 2026
+| Latest Stable Release: v4.1.1 -  19 July 2026
 |--------------------------------------------------------------------------
 */
 
