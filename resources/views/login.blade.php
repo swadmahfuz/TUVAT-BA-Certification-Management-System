@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="robots" content="noindex">
-    <title>TÜV Austria BIC CVS - Training | Login</title>
+    <title>TÜV Austria BIC CVS - BA Certification | Login</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="shortcut icon" href="{{ asset('favicon.ico') }}">
     <style>
@@ -47,6 +47,12 @@
                 </div>
             @endif
 
+            @if(session('success'))
+                <div class="alert alert-success text-center">
+                    {{ session('success') }}
+                </div>
+            @endif
+
             <form method="POST" action="{{ route('certificate.login') }}">
                 @csrf
                 <div class="mb-3">
@@ -61,6 +67,12 @@
                     <button type="submit" class="btn btn-primary">Log in</button>
                 </div>
             </form>
+
+            @if(config('cvs.registration_enabled') && Route::has('register'))
+                <div class="text-center mt-3">
+                    <a href="{{ route('register') }}">Create an account</a>
+                </div>
+            @endif
         </div>
     </div>
 

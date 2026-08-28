@@ -2,7 +2,7 @@
 
 namespace App\Exports;
 
-use App\Models\BaCertificate;
+use App\Models\CertificationCertificate;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
@@ -27,7 +27,7 @@ class CertificateExport implements FromCollection, WithHeadings, ShouldAutoSize
      */
     public function collection()
     {
-        return BaCertificate::with([
+        return CertificationCertificate::with([
                 'client',
                 'standard',
                 'accreditationBody'

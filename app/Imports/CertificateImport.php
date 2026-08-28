@@ -2,10 +2,10 @@
 
 namespace App\Imports;
 
-use App\Models\BaCertificate;
-use App\Models\BaClient;
-use App\Models\BaStandard;
-use App\Models\BaAccreditationBody;
+use App\Models\CertificationCertificate;
+use App\Models\CertificationClient;
+use App\Models\CertificationStandard;
+use App\Models\CertificationAccreditationBody;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -20,7 +20,7 @@ use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
 | Developed by: Swad Ahmed Mahfuz (Head of Divison - Business Assurance & Training, Bangladesh)
 | Contact: swad.mahfuz@gmail.com, +1-725-867-7718, +88 01733 023 008
 | Project Start: 12 October 2022
-| Latest Stable Release: v3.4.2 -  10 June 2026
+| Latest Stable Release: v5.1.0 -  29 August 2026
 |--------------------------------------------------------------------------
 */
 
@@ -52,7 +52,7 @@ class CertificateImport implements ToModel, WithHeadingRow
         |--------------------------------------------------------------------------
         */
 
-        $client = BaClient::firstOrCreate(
+        $client = CertificationClient::firstOrCreate(
             [
                 'client_name' => trim($row['client_name']),
             ],
@@ -76,7 +76,7 @@ class CertificateImport implements ToModel, WithHeadingRow
         $standard = null;
 
         if (!empty($row['standard_name'])) {
-            $standard = BaStandard::firstOrCreate(
+            $standard = CertificationStandard::firstOrCreate(
                 [
                     'standard_name' => trim($row['standard_name']),
                 ],
@@ -96,7 +96,7 @@ class CertificateImport implements ToModel, WithHeadingRow
         $accreditationBody = null;
 
         if (!empty($row['accreditation_body'])) {
-            $accreditationBody = BaAccreditationBody::firstOrCreate(
+            $accreditationBody = CertificationAccreditationBody::firstOrCreate(
                 [
                     'accreditation_body_name' => trim($row['accreditation_body']),
                 ],
@@ -160,9 +160,9 @@ class CertificateImport implements ToModel, WithHeadingRow
         $certificateNumber = !empty($row['certificate_number']) ? trim($row['certificate_number']) : null;
 
         $data = [
-            'ba_client_id'                                  => $client->id,
-            'ba_standard_id'                                => $standard ? $standard->id : null,
-            'ba_accreditation_body_id'                      => $accreditationBody ? $accreditationBody->id : null,
+            'certification_client_id'                       => $client->id,
+            'certification_standard_id'                     => $standard ? $standard->id : null,
+            'certification_accreditation_body_id'           => $accreditationBody ? $accreditationBody->id : null,
 
             'certificate_number'                            => $certificateNumber,
             'certificate_scope'                             => $row['certificate_scope'] ?? null,
@@ -203,7 +203,7 @@ class CertificateImport implements ToModel, WithHeadingRow
         ];
 
         if ($certificateNumber) {
-            return BaCertificate::updateOrCreate(
+            return CertificationCertificate::updateOrCreate(
                 [
                     'certificate_number' => $certificateNumber,
                 ],
@@ -211,7 +211,7 @@ class CertificateImport implements ToModel, WithHeadingRow
             );
         }
 
-        return new BaCertificate($data);
+        return new CertificationCertificate($data);
     }
 
     /**

@@ -2,18 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\CertificateExport;
+use App\Imports\CertificateImport;
+use App\Models\CertificationAccreditationBody;
+use App\Models\CertificationAuditReport;
+use App\Models\CertificationCertificate;
+use App\Models\CertificationClient;
+use App\Models\CertificationStandard;
 use App\Models\User;
-use App\Models\BaClient;
-use App\Models\BaStandard;
-use App\Models\BaAccreditationBody;
-use App\Models\BaCertificate;
-use App\Models\BaAuditReport;
+use App\Services\ActivityLogService;
+use App\Services\DashboardService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
-use App\Exports\CertificateExport;
-use App\Imports\CertificateImport;
 use Maatwebsite\Excel\Facades\Excel;
 
 /*
@@ -23,13 +25,18 @@ use Maatwebsite\Excel\Facades\Excel;
 | Developed by: Swad Ahmed Mahfuz (Head of Divison - Business Assurance & Training, Bangladesh)
 | Contact: swad.mahfuz@gmail.com, +1-725-867-7718, +88 01733 023 008
 | Project Start: 12 October 2022
-| Latest Stable Release: v4.1.1 -  19 July 2026
+| Latest Stable Release: v5.1.0 -  29 August 2026
 |--------------------------------------------------------------------------
 */
 
-
 class CertificateController extends Controller
 {
+    protected ActivityLogService $activityLog;
+
+    public function __construct(ActivityLogService $activityLog)
+    {
+        $this->activityLog = $activityLog;
+    }
     /*
     |--------------------------------------------------------------------------
     | Public / Unauthenticated Functions
@@ -42,7 +49,7 @@ class CertificateController extends Controller
             return view('verify-certificate');
         }
 
-        $certificates = BaCertificate::with(['client', 'standard', 'accreditationBody'])
+        $certificates = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
             ->where('certificate_number', $request->search)
             ->where('status', 'Approved')
             ->paginate(1);
@@ -59,22 +66,32 @@ class CertificateController extends Controller
     public function addCredentials(Request $request)
     {
         $credentials = $request->only('email', 'password');
+        $email = $credentials['email'] ?? null;
+
+        if ($email) {
+            $existing = User::where('email', $email)->first();
+
+            if ($existing && !$existing->isActive()) {
+                return redirect('/admin')->with('error', 'Your account has been deactivated. Contact an administrator.');
+            }
+        }
 
         if (Auth::attempt($credentials)) {
+            $user = Auth::user();
+
+            if (!$user->hasVerifiedEmail()) {
+                return redirect()->route('verification.notice');
+            }
+
+            if ($user->mustChangePassword()) {
+                return redirect()->route('account.password.edit')
+                    ->with('warning', 'You must set a new password before continuing.');
+            }
+
             return redirect('/dashboard')->with('success', 'Thank You for authorizing. Please proceed.');
         }
 
         return redirect('/admin')->with('error', 'You entered the wrong credentials');
-    }
-
-    public function logout()
-    {
-        if (Auth::check()) {
-            Auth::logout();
-            return redirect('/admin');
-        }
-
-        return redirect()->route('certificate.search');
     }
 
     /*
@@ -83,53 +100,15 @@ class CertificateController extends Controller
     |--------------------------------------------------------------------------
     */
 
-    public function getDashboard()
+    public function getDashboard(DashboardService $dashboardService)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
-
-        $today = Carbon::today();
-        $next90Days = Carbon::today()->addDays(90);
-
-        $totalClients = BaClient::count();
-        $totalCertificates = BaCertificate::count();
-        $activeCertificates = BaCertificate::where('certificate_status', 'Active')->count();
-
-        $pendingReview = BaCertificate::where('status', 'Pending Review')->count();
-        $pendingApproval = BaCertificate::where('status', 'Pending Approval')->count();
-        $approvedCertificates = BaCertificate::where('status', 'Approved')->count();
-
-        $upcomingSurveillance1 = BaCertificate::whereBetween('surveillance_1_due_date', [$today, $next90Days])->count();
-        $upcomingSurveillance2 = BaCertificate::whereBetween('surveillance_2_due_date', [$today, $next90Days])->count();
-        $upcomingRecertification = BaCertificate::whereBetween('recertification_due_date', [$today, $next90Days])->count();
-
-        $expiredCertificates = BaCertificate::whereDate('certificate_expiry_date', '<', $today)->count();
-
-        $expiredWithinGrace = BaCertificate::whereDate('certificate_expiry_date', '<', $today)
-            ->whereDate('grace_period_end_date', '>=', $today)
-            ->count();
-
-        $expiredBeyondGrace = BaCertificate::whereDate('grace_period_end_date', '<', $today)->count();
-
-        $certificates = BaCertificate::with(['client', 'standard', 'accreditationBody'])
+        $certificates = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
             ->orderBy('created_at', 'DESC')
             ->paginate(100);
 
-        return view('dashboard', compact(
-            'certificates',
-            'totalClients',
-            'totalCertificates',
-            'activeCertificates',
-            'pendingReview',
-            'pendingApproval',
-            'approvedCertificates',
-            'upcomingSurveillance1',
-            'upcomingSurveillance2',
-            'upcomingRecertification',
-            'expiredCertificates',
-            'expiredWithinGrace',
-            'expiredBeyondGrace'
+        return view('dashboard', array_merge(
+            $dashboardService->data(),
+            compact('certificates')
         ));
     }
 
@@ -141,11 +120,12 @@ class CertificateController extends Controller
 
     public function showAllUsers()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
-
-        $users = User::orderBy('name')->get();
+        $users = User::with('departmentRelation')
+            ->withCount([
+                'certificationCertificatesCreated as certificates_created_count',
+                'certificationCertificatesReviewed as certificates_reviewed_count',
+                'certificationCertificatesApproved as certificates_approved_count',
+            ])->orderBy('name')->get();
 
         return view('all-users', compact('users'));
     }
@@ -158,11 +138,8 @@ class CertificateController extends Controller
 
     public function getAllClients(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $query = BaClient::withCount('certificates')->orderBy('client_name');
+        $query = CertificationClient::withCount('certificates')->orderBy('client_name');
 
         if ($request->search) {
             $search = $request->search;
@@ -183,18 +160,12 @@ class CertificateController extends Controller
 
     public function addClient()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         return view('add-client');
     }
 
     public function createClient(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
             'client_name' => 'required|string|max:255',
@@ -205,7 +176,7 @@ class CertificateController extends Controller
             'remarks' => 'nullable|string',
         ]);
 
-        $client = BaClient::create([
+        $client = CertificationClient::create([
             'client_name' => $request->client_name,
             'client_address' => $request->client_address,
             'contact_person' => $request->contact_person,
@@ -216,16 +187,20 @@ class CertificateController extends Controller
             'created_by_id' => Auth::user()->id,
         ]);
 
+        $this->activityLog->record(
+            'client.created',
+            'client',
+            $client->id,
+            'Client ' . $client->client_name . ' was created.'
+        );
+
         return redirect('/view-client/' . $client->id)->with('success', 'Client added successfully.');
     }
 
     public function viewClient($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $client = BaClient::with([
+        $client = CertificationClient::with([
             'certificates.standard',
             'certificates.accreditationBody',
             'certificates.auditReports'
@@ -236,23 +211,17 @@ class CertificateController extends Controller
 
     public function editClient($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $client = BaClient::findOrFail($id);
+        $client = CertificationClient::findOrFail($id);
 
         return view('edit-client', compact('client'));
     }
 
     public function updateClient(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'id' => 'required|exists:ba_clients,id',
+            'id' => 'required|exists:certification_clients,id',
             'client_name' => 'required|string|max:255',
             'client_address' => 'nullable|string',
             'contact_person' => 'nullable|string|max:255',
@@ -261,7 +230,7 @@ class CertificateController extends Controller
             'remarks' => 'nullable|string',
         ]);
 
-        $client = BaClient::findOrFail($request->id);
+        $client = CertificationClient::findOrFail($request->id);
 
         $client->update([
             'client_name' => $request->client_name,
@@ -274,20 +243,26 @@ class CertificateController extends Controller
             'updated_by_id' => Auth::user()->id,
         ]);
 
+        $this->activityLog->record(
+            'client.updated',
+            'client',
+            $client->id,
+            'Client ' . $client->client_name . ' was updated.'
+        );
+
         return redirect('/view-client/' . $client->id)->with('success', 'Client updated successfully.');
     }
 
     public function deleteClient($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $client = BaClient::withCount('certificates')->findOrFail($id);
+        $client = CertificationClient::withCount('certificates')->findOrFail($id);
 
         if ($client->certificates_count > 0) {
             return back()->with('error', 'This client has certificate records. Please delete or transfer the certificate records first.');
         }
+
+        $clientName = $client->client_name;
 
         $client->update([
             'deleted_by' => Auth::user()->name,
@@ -295,6 +270,13 @@ class CertificateController extends Controller
         ]);
 
         $client->delete();
+
+        $this->activityLog->record(
+            'client.deleted',
+            'client',
+            $client->id,
+            'Client ' . $clientName . ' was deleted.'
+        );
 
         return redirect('/clients')->with('success', 'Client deleted successfully.');
     }
@@ -307,16 +289,13 @@ class CertificateController extends Controller
 
     public function addCertificate($clientId = null)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $clients = BaClient::orderBy('client_name')->get();
-        $standards = BaStandard::where('status', 'Active')->orderBy('standard_name')->get();
-        $accreditationBodies = BaAccreditationBody::where('status', 'Active')->orderBy('accreditation_body_name')->get();
+        $clients = CertificationClient::orderBy('client_name')->get();
+        $standards = CertificationStandard::where('status', 'Active')->orderBy('standard_name')->get();
+        $accreditationBodies = CertificationAccreditationBody::where('status', 'Active')->orderBy('accreditation_body_name')->get();
         $users = User::orderBy('name')->get();
 
-        $selectedClient = $clientId ? BaClient::find($clientId) : null;
+        $selectedClient = $clientId ? CertificationClient::find($clientId) : null;
 
         return view('add-certificate', compact(
             'clients',
@@ -329,16 +308,13 @@ class CertificateController extends Controller
 
     public function createCertificate(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'ba_client_id' => 'required|exists:ba_clients,id',
-            'ba_standard_id' => 'nullable|exists:ba_standards,id',
-            'ba_accreditation_body_id' => 'nullable|exists:ba_accreditation_bodies,id',
+            'certification_client_id' => 'required|exists:certification_clients,id',
+            'certification_standard_id' => 'nullable|exists:certification_standards,id',
+            'certification_accreditation_body_id' => 'nullable|exists:certification_accreditation_bodies,id',
 
-            'certificate_number' => 'nullable|string|max:255|unique:ba_certificates,certificate_number',
+            'certificate_number' => 'nullable|string|max:255|unique:certification_certificates,certificate_number',
             'certificate_scope' => 'nullable|string',
             'certificate_issue_date' => 'nullable|date',
             'certificate_expiry_date' => 'nullable|date',
@@ -367,10 +343,10 @@ class CertificateController extends Controller
             $request->certificate_expiry_date
         );
 
-        $certificate = BaCertificate::create([
-            'ba_client_id' => $request->ba_client_id,
-            'ba_standard_id' => $request->ba_standard_id,
-            'ba_accreditation_body_id' => $request->ba_accreditation_body_id,
+        $certificate = CertificationCertificate::create([
+            'certification_client_id' => $request->certification_client_id,
+            'certification_standard_id' => $request->certification_standard_id,
+            'certification_accreditation_body_id' => $request->certification_accreditation_body_id,
 
             'certificate_number' => $request->certificate_number,
             'certificate_scope' => $request->certificate_scope,
@@ -407,16 +383,20 @@ class CertificateController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        $this->activityLog->record(
+            'certificate.created',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was created for client ID ' . $certificate->certification_client_id . '.'
+        );
+
         return redirect('/view-certificate/' . $certificate->id)->with('success', 'Certificate record added successfully.');
     }
 
     public function viewCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::with([
+        $certificate = CertificationCertificate::with([
             'client',
             'standard',
             'accreditationBody',
@@ -428,14 +408,11 @@ class CertificateController extends Controller
 
     public function editCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::findOrFail($id);
-        $clients = BaClient::orderBy('client_name')->get();
-        $standards = BaStandard::where('status', 'Active')->orderBy('standard_name')->get();
-        $accreditationBodies = BaAccreditationBody::where('status', 'Active')->orderBy('accreditation_body_name')->get();
+        $certificate = CertificationCertificate::findOrFail($id);
+        $clients = CertificationClient::orderBy('client_name')->get();
+        $standards = CertificationStandard::where('status', 'Active')->orderBy('standard_name')->get();
+        $accreditationBodies = CertificationAccreditationBody::where('status', 'Active')->orderBy('accreditation_body_name')->get();
         $users = User::orderBy('name')->get();
 
         return view('edit-certificate', compact(
@@ -449,17 +426,14 @@ class CertificateController extends Controller
 
     public function updateCertificate(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'id' => 'required|exists:ba_certificates,id',
-            'ba_client_id' => 'required|exists:ba_clients,id',
-            'ba_standard_id' => 'nullable|exists:ba_standards,id',
-            'ba_accreditation_body_id' => 'nullable|exists:ba_accreditation_bodies,id',
+            'id' => 'required|exists:certification_certificates,id',
+            'certification_client_id' => 'required|exists:certification_clients,id',
+            'certification_standard_id' => 'nullable|exists:certification_standards,id',
+            'certification_accreditation_body_id' => 'nullable|exists:certification_accreditation_bodies,id',
 
-            'certificate_number' => 'nullable|string|max:255|unique:ba_certificates,certificate_number,' . $request->id,
+            'certificate_number' => 'nullable|string|max:255|unique:certification_certificates,certificate_number,' . $request->id,
             'certificate_scope' => 'nullable|string',
             'certificate_issue_date' => 'nullable|date',
             'certificate_expiry_date' => 'nullable|date',
@@ -480,7 +454,7 @@ class CertificateController extends Controller
             'remarks' => 'nullable|string',
         ]);
 
-        $certificate = BaCertificate::findOrFail($request->id);
+        $certificate = CertificationCertificate::findOrFail($request->id);
 
         $reviewer = User::where('name', $request->review_by)->first();
         $approver = User::where('name', $request->approval_by)->first();
@@ -491,9 +465,9 @@ class CertificateController extends Controller
         );
 
         $certificate->update([
-            'ba_client_id' => $request->ba_client_id,
-            'ba_standard_id' => $request->ba_standard_id,
-            'ba_accreditation_body_id' => $request->ba_accreditation_body_id,
+            'certification_client_id' => $request->certification_client_id,
+            'certification_standard_id' => $request->certification_standard_id,
+            'certification_accreditation_body_id' => $request->certification_accreditation_body_id,
 
             'certificate_number' => $request->certificate_number,
             'certificate_scope' => $request->certificate_scope,
@@ -531,6 +505,14 @@ class CertificateController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        $this->activityLog->record(
+            'certificate.updated',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was updated and returned for review.',
+            ['status' => $certificate->status]
+        );
+
         return redirect('/view-certificate/' . $certificate->id)->with('success', 'Certificate record updated successfully.');
     }
 
@@ -540,48 +522,25 @@ class CertificateController extends Controller
     |--------------------------------------------------------------------------
     */
 
-    public function getPendingCertificates()
+    public function getPendingCertificates(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
+        $assignment = $request->query('assignment');
+        $query = $this->pendingCertificatesQuery($assignment);
 
-        $userId = Auth::user()->id;
-        $userName = Auth::user()->name;
-
-        $certificates = BaCertificate::with(['client', 'standard', 'accreditationBody'])
-            ->where(function ($query) use ($userId, $userName) {
-                $query->where(function ($q) use ($userId, $userName) {
-                    $q->where('status', 'Pending Review')
-                        ->where(function ($subQuery) use ($userId, $userName) {
-                            $subQuery->where('review_by_id', $userId)
-                                ->orWhere('review_by', $userName);
-                        });
-                })
-                ->orWhere(function ($q) use ($userId, $userName) {
-                    $q->where('status', 'Pending Approval')
-                        ->where(function ($subQuery) use ($userId, $userName) {
-                            $subQuery->where('approval_by_id', $userId)
-                                ->orWhere('approval_by', $userName);
-                        });
-                });
-            })
-            ->whereNotIn('status', ['Approved', 'approved', ' APPROVED'])
+        $certificates = $query
+            ->with(['client', 'standard', 'accreditationBody'])
             ->orderBy('created_at', 'DESC')
-            ->paginate(100);
+            ->paginate(100)
+            ->withQueryString();
 
-        return view('pending-certificates', compact('certificates'));
+        return view('pending-certificates', compact('certificates', 'assignment'));
     }
 
     public function reviewCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
+        $certificate = CertificationCertificate::findOrFail($id);
 
-        $certificate = BaCertificate::findOrFail($id);
-
-        if (Auth::user()->id != $certificate->review_by_id && Auth::user()->name != $certificate->review_by) {
+        if (Auth::id() != $certificate->review_by_id) {
             return back()->with('error', 'Unauthorized: You are not assigned to review this certificate.');
         }
 
@@ -589,21 +548,24 @@ class CertificateController extends Controller
             'status' => 'Pending Approval',
             'reviewed_at' => Carbon::now(),
             'updated_by' => Auth::user()->name,
-            'updated_by_id' => Auth::user()->id,
+            'updated_by_id' => Auth::id(),
         ]);
+
+        $this->activityLog->record(
+            'certificate.reviewed',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was reviewed.'
+        );
 
         return redirect('/view-certificate/' . $certificate->id)->with('success', 'Certificate marked as reviewed.');
     }
 
     public function approveCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
+        $certificate = CertificationCertificate::findOrFail($id);
 
-        $certificate = BaCertificate::findOrFail($id);
-
-        if (Auth::user()->id != $certificate->approval_by_id && Auth::user()->name != $certificate->approval_by) {
+        if (Auth::id() != $certificate->approval_by_id) {
             return back()->with('error', 'Unauthorized: You are not assigned to approve this certificate.');
         }
 
@@ -615,60 +577,177 @@ class CertificateController extends Controller
             'status' => 'Approved',
             'approved_at' => Carbon::now(),
             'updated_by' => Auth::user()->name,
-            'updated_by_id' => Auth::user()->id,
+            'updated_by_id' => Auth::id(),
         ]);
+
+        $this->activityLog->record(
+            'certificate.approved',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was approved.'
+        );
 
         return back()->with('success', 'Certificate approved successfully.');
     }
 
     public function bulkReview()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
-
         $user = Auth::user();
 
-        $updated = DB::table('ba_certificates')
-            ->where('status', 'Pending Review')
-            ->where(function ($query) use ($user) {
-                $query->where('review_by_id', $user->id)
-                    ->orWhere('review_by', $user->name);
-            })
+        $updated = CertificationCertificate::where('status', 'Pending Review')
+            ->where('review_by_id', $user->id)
             ->update([
                 'status' => 'Pending Approval',
+                'reviewed_at' => Carbon::now(),
                 'updated_by' => $user->name,
                 'updated_by_id' => $user->id,
                 'updated_at' => Carbon::now(),
-                'reviewed_at' => Carbon::now(),
             ]);
 
-        return redirect()->back()->with('success', "$updated certificate(s) marked as Reviewed.");
+        $this->activityLog->record(
+            'certificate.bulk_reviewed',
+            'certificate',
+            null,
+            $updated . ' certificate(s) were bulk reviewed.',
+            ['count' => $updated]
+        );
+
+        return back()->with('success', $updated . ' certificate(s) marked as Reviewed.');
     }
 
     public function bulkApprove()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
-
         $user = Auth::user();
 
-        $updated = DB::table('ba_certificates')
-            ->where('status', 'Pending Approval')
-            ->where(function ($query) use ($user) {
-                $query->where('approval_by_id', $user->id)
-                    ->orWhere('approval_by', $user->name);
-            })
+        $updated = CertificationCertificate::where('status', 'Pending Approval')
+            ->where('approval_by_id', $user->id)
             ->update([
                 'status' => 'Approved',
+                'approved_at' => Carbon::now(),
                 'updated_by' => $user->name,
                 'updated_by_id' => $user->id,
                 'updated_at' => Carbon::now(),
-                'approved_at' => Carbon::now(),
             ]);
 
-        return redirect()->back()->with('success', "$updated certificate(s) marked as Approved.");
+        $this->activityLog->record(
+            'certificate.bulk_approved',
+            'certificate',
+            null,
+            $updated . ' certificate(s) were bulk approved.',
+            ['count' => $updated]
+        );
+
+        return back()->with('success', $updated . ' certificate(s) marked as Approved.');
+    }
+
+    public function bulkReviewSelected(Request $request)
+    {
+        $ids = $this->validatedSelectedCertificateIds($request);
+        $user = Auth::user();
+
+        $eligibleIds = CertificationCertificate::whereIn('id', $ids)
+            ->assignedForReview($user->id)
+            ->pluck('id')
+            ->all();
+
+        $updated = CertificationCertificate::whereIn('id', $eligibleIds)->update([
+            'status' => 'Pending Approval',
+            'reviewed_at' => Carbon::now(),
+            'updated_by' => $user->name,
+            'updated_by_id' => $user->id,
+            'updated_at' => Carbon::now(),
+        ]);
+        $skipped = count($ids) - $updated;
+
+        $this->activityLog->record(
+            'certificate.selected_bulk_reviewed',
+            'certificate',
+            null,
+            $updated . ' selected certificate(s) were bulk reviewed.',
+            [
+                'selected_ids' => $ids,
+                'updated_ids' => $eligibleIds,
+                'updated_count' => $updated,
+                'skipped_count' => $skipped,
+            ]
+        );
+
+        return back()
+            ->with('success', $updated . ' certificate(s) reviewed; ' . $skipped . ' skipped.')
+            ->with('bulk_action_completed', true);
+    }
+
+    public function bulkApproveSelected(Request $request)
+    {
+        $ids = $this->validatedSelectedCertificateIds($request);
+        $user = Auth::user();
+
+        $eligibleIds = CertificationCertificate::whereIn('id', $ids)
+            ->assignedForApproval($user->id)
+            ->pluck('id')
+            ->all();
+
+        $updated = CertificationCertificate::whereIn('id', $eligibleIds)->update([
+            'status' => 'Approved',
+            'approved_at' => Carbon::now(),
+            'updated_by' => $user->name,
+            'updated_by_id' => $user->id,
+            'updated_at' => Carbon::now(),
+        ]);
+        $skipped = count($ids) - $updated;
+
+        $this->activityLog->record(
+            'certificate.selected_bulk_approved',
+            'certificate',
+            null,
+            $updated . ' selected certificate(s) were bulk approved.',
+            [
+                'selected_ids' => $ids,
+                'updated_ids' => $eligibleIds,
+                'updated_count' => $updated,
+                'skipped_count' => $skipped,
+            ]
+        );
+
+        return back()
+            ->with('success', $updated . ' certificate(s) approved; ' . $skipped . ' skipped.')
+            ->with('bulk_action_completed', true);
+    }
+
+    public function bulkDeleteSelected(Request $request)
+    {
+        $ids = $this->validatedSelectedCertificateIds($request);
+        $user = Auth::user();
+
+        $deletedIds = DB::transaction(function () use ($ids, $user) {
+            $certificates = CertificationCertificate::whereIn('id', $ids)->lockForUpdate()->get();
+            $deletedIds = [];
+
+            foreach ($certificates as $certificate) {
+                $this->softDeleteCertificate($certificate, $user);
+                $deletedIds[] = $certificate->id;
+            }
+
+            return $deletedIds;
+        });
+        $skipped = count($ids) - count($deletedIds);
+
+        $this->activityLog->record(
+            'certificate.selected_bulk_deleted',
+            'certificate',
+            null,
+            count($deletedIds) . ' selected certificate(s) were deleted.',
+            [
+                'selected_ids' => $ids,
+                'deleted_ids' => $deletedIds,
+                'deleted_count' => count($deletedIds),
+                'skipped_count' => $skipped,
+            ]
+        );
+
+        return back()
+            ->with('success', count($deletedIds) . ' certificate(s) deleted; ' . $skipped . ' skipped.')
+            ->with('bulk_action_completed', true);
     }
 
     /*
@@ -679,14 +758,11 @@ class CertificateController extends Controller
 
     public function upcomingAudits()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $today = Carbon::today();
         $next90Days = Carbon::today()->addDays(90);
 
-        $certificates = BaCertificate::with(['client', 'standard', 'accreditationBody'])
+        $certificates = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
             ->where(function ($query) use ($today, $next90Days) {
                 $query->whereBetween('surveillance_1_due_date', [$today, $next90Days])
                     ->orWhereBetween('surveillance_2_due_date', [$today, $next90Days])
@@ -700,13 +776,10 @@ class CertificateController extends Controller
 
     public function expiredCertificates()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $today = Carbon::today();
 
-        $certificates = BaCertificate::with(['client', 'standard', 'accreditationBody'])
+        $certificates = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
             ->whereDate('certificate_expiry_date', '<', $today)
             ->orderBy('certificate_expiry_date', 'ASC')
             ->paginate(100);
@@ -722,39 +795,28 @@ class CertificateController extends Controller
 
     public function deleteCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
+        $certificate = CertificationCertificate::findOrFail($id);
+        $this->softDeleteCertificate($certificate, Auth::user());
 
-        $certificate = BaCertificate::findOrFail($id);
-
-        $certificate->update([
-            'status' => 'Deleted',
-            'deleted_by' => Auth::user()->name,
-            'deleted_by_id' => Auth::user()->id,
-            'reviewed_at' => null,
-            'approved_at' => null,
-            'updated_by' => Auth::user()->name,
-            'updated_by_id' => Auth::user()->id,
-        ]);
-
-        $certificate->delete();
+        $this->activityLog->record(
+            'certificate.deleted',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was deleted.'
+        );
 
         return back()->with('success', 'Certificate record deleted successfully.');
     }
 
     public function getDeletedCertificates()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificates = BaCertificate::onlyTrashed()
+        $certificates = CertificationCertificate::onlyTrashed()
             ->with(['client', 'standard', 'accreditationBody'])
             ->orderBy('deleted_at', 'DESC')
             ->paginate(100);
 
-        $clients = BaClient::onlyTrashed()
+        $clients = CertificationClient::onlyTrashed()
             ->orderBy('deleted_at', 'DESC')
             ->paginate(100);
 
@@ -763,11 +825,8 @@ class CertificateController extends Controller
 
     public function restoreCertificate($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::onlyTrashed()->findOrFail($id);
+        $certificate = CertificationCertificate::onlyTrashed()->findOrFail($id);
 
         $certificate->restore();
 
@@ -776,8 +835,15 @@ class CertificateController extends Controller
             'deleted_by' => null,
             'deleted_by_id' => null,
             'updated_by' => Auth::user()->name,
-            'updated_by_id' => Auth::user()->id,
+            'updated_by_id' => Auth::id(),
         ]);
+
+        $this->activityLog->record(
+            'certificate.restored',
+            'certificate',
+            $certificate->id,
+            'Certificate ' . ($certificate->certificate_number ?: '#' . $certificate->id) . ' was restored.'
+        );
 
         return back()->with('success', 'Certificate restored successfully.');
     }
@@ -790,15 +856,12 @@ class CertificateController extends Controller
 
     public function uploadPdf(Request $request, $id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
             'certificate_pdf' => 'required|mimes:pdf|max:20480',
         ]);
 
-        $certificate = BaCertificate::with('client')->findOrFail($id);
+        $certificate = CertificationCertificate::with('client')->findOrFail($id);
 
         $user = Auth::user();
 
@@ -839,16 +902,20 @@ class CertificateController extends Controller
             'updated_by_id' => $user->id,
         ]);
 
+        $this->activityLog->record(
+            'certificate.pdf_uploaded',
+            'certificate',
+            $certificate->id,
+            'Certificate PDF was uploaded for ' . ($certificate->certificate_number ?: '#' . $certificate->id) . '.'
+        );
+
         return back()->with('success', 'Certificate PDF uploaded successfully.');
     }
 
     public function downloadPdf($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::findOrFail($id);
+        $certificate = CertificationCertificate::findOrFail($id);
 
         $filePath = public_path('BA Certificate PDFs/' . $certificate->certificate_pdf);
 
@@ -861,11 +928,8 @@ class CertificateController extends Controller
 
     public function viewPdf($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::findOrFail($id);
+        $certificate = CertificationCertificate::findOrFail($id);
 
         $filePath = public_path('BA Certificate PDFs/' . $certificate->certificate_pdf);
 
@@ -887,11 +951,8 @@ class CertificateController extends Controller
 
     public function uploadAuditReport(Request $request, $certificateId)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $certificate = BaCertificate::findOrFail($certificateId);
+        $certificate = CertificationCertificate::findOrFail($certificateId);
 
         $request->validate([
             'audit_year' => 'required|string|max:20',
@@ -914,8 +975,8 @@ class CertificateController extends Controller
 
         $file->move($destinationPath, $fileName);
 
-        BaAuditReport::create([
-            'ba_certificate_id' => $certificate->id,
+        CertificationAuditReport::create([
+            'certification_certificate_id' => $certificate->id,
             'audit_year' => $request->audit_year,
             'audit_type' => $request->audit_type,
             'audit_date' => $request->audit_date,
@@ -926,16 +987,20 @@ class CertificateController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        $this->activityLog->record(
+            'audit_report.uploaded',
+            'certificate',
+            $certificate->id,
+            'Audit report (' . $request->audit_year . ') uploaded for certificate #' . $certificate->id . '.'
+        );
+
         return back()->with('success', 'Audit report uploaded successfully.');
     }
 
     public function downloadAuditReport($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $report = BaAuditReport::findOrFail($id);
+        $report = CertificationAuditReport::findOrFail($id);
 
         $filePath = public_path('BA Audit Reports/' . $report->audit_report_file);
 
@@ -948,11 +1013,8 @@ class CertificateController extends Controller
 
     public function viewAuditReport($id)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $report = BaAuditReport::findOrFail($id);
+        $report = CertificationAuditReport::findOrFail($id);
 
         $filePath = public_path('BA Audit Reports/' . $report->audit_report_file);
 
@@ -974,28 +1036,22 @@ class CertificateController extends Controller
 
     public function manageStandards()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $standards = BaStandard::orderBy('standard_name')->get();
+        $standards = CertificationStandard::orderBy('standard_name')->get();
 
         return view('manage-standards', compact('standards'));
     }
 
     public function createStandard(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'standard_name' => 'required|string|max:255|unique:ba_standards,standard_name',
+            'standard_name' => 'required|string|max:255|unique:certification_standards,standard_name',
             'standard_code' => 'nullable|string|max:255',
             'status' => 'required|string|max:50',
         ]);
 
-        BaStandard::create([
+        CertificationStandard::create([
             'standard_name' => $request->standard_name,
             'standard_code' => $request->standard_code,
             'status' => $request->status,
@@ -1006,18 +1062,15 @@ class CertificateController extends Controller
 
     public function updateStandard(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'id' => 'required|exists:ba_standards,id',
-            'standard_name' => 'required|string|max:255|unique:ba_standards,standard_name,' . $request->id,
+            'id' => 'required|exists:certification_standards,id',
+            'standard_name' => 'required|string|max:255|unique:certification_standards,standard_name,' . $request->id,
             'standard_code' => 'nullable|string|max:255',
             'status' => 'required|string|max:50',
         ]);
 
-        $standard = BaStandard::findOrFail($request->id);
+        $standard = CertificationStandard::findOrFail($request->id);
 
         $standard->update([
             'standard_name' => $request->standard_name,
@@ -1036,28 +1089,22 @@ class CertificateController extends Controller
 
     public function manageAccreditationBodies()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
-        $accreditationBodies = BaAccreditationBody::orderBy('accreditation_body_name')->get();
+        $accreditationBodies = CertificationAccreditationBody::orderBy('accreditation_body_name')->get();
 
         return view('manage-accreditation-bodies', compact('accreditationBodies'));
     }
 
     public function createAccreditationBody(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'accreditation_body_name' => 'required|string|max:255|unique:ba_accreditation_bodies,accreditation_body_name',
+            'accreditation_body_name' => 'required|string|max:255|unique:certification_accreditation_bodies,accreditation_body_name',
             'short_name' => 'nullable|string|max:255',
             'status' => 'required|string|max:50',
         ]);
 
-        BaAccreditationBody::create([
+        CertificationAccreditationBody::create([
             'accreditation_body_name' => $request->accreditation_body_name,
             'short_name' => $request->short_name,
             'status' => $request->status,
@@ -1068,18 +1115,15 @@ class CertificateController extends Controller
 
     public function updateAccreditationBody(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $request->validate([
-            'id' => 'required|exists:ba_accreditation_bodies,id',
-            'accreditation_body_name' => 'required|string|max:255|unique:ba_accreditation_bodies,accreditation_body_name,' . $request->id,
+            'id' => 'required|exists:certification_accreditation_bodies,id',
+            'accreditation_body_name' => 'required|string|max:255|unique:certification_accreditation_bodies,accreditation_body_name,' . $request->id,
             'short_name' => 'nullable|string|max:255',
             'status' => 'required|string|max:50',
         ]);
 
-        $body = BaAccreditationBody::findOrFail($request->id);
+        $body = CertificationAccreditationBody::findOrFail($request->id);
 
         $body->update([
             'accreditation_body_name' => $request->accreditation_body_name,
@@ -1098,14 +1142,11 @@ class CertificateController extends Controller
 
     public function liveSearch(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $perPage = 100;
         $userInput = $request->input('userInput', '');
 
-        $query = BaCertificate::with(['client', 'standard', 'accreditationBody']);
+        $query = CertificationCertificate::with(['client', 'standard', 'accreditationBody']);
 
         if (!empty($userInput)) {
             $query->where(function ($q) use ($userInput) {
@@ -1142,14 +1183,11 @@ class CertificateController extends Controller
 
     public function liveSearchDeleted(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         $perPage = 100;
         $userInput = $request->input('userInput', '');
 
-        $query = BaCertificate::onlyTrashed()->with(['client', 'standard', 'accreditationBody']);
+        $query = CertificationCertificate::onlyTrashed()->with(['client', 'standard', 'accreditationBody']);
 
         if (!empty($userInput)) {
             $query->where(function ($q) use ($userInput) {
@@ -1171,32 +1209,12 @@ class CertificateController extends Controller
 
     public function liveSearchPending(Request $request)
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
-
         $perPage = 100;
         $userInput = $request->input('userInput', '');
-        $userId = Auth::user()->id;
-        $userName = Auth::user()->name;
+        $assignment = $request->input('assignment');
 
-        $query = BaCertificate::with(['client', 'standard', 'accreditationBody'])
-            ->where(function ($query) use ($userId, $userName) {
-                $query->where(function ($q) use ($userId, $userName) {
-                    $q->where('status', 'Pending Review')
-                        ->where(function ($subQuery) use ($userId, $userName) {
-                            $subQuery->where('review_by_id', $userId)
-                                ->orWhere('review_by', $userName);
-                        });
-                })
-                ->orWhere(function ($q) use ($userId, $userName) {
-                    $q->where('status', 'Pending Approval')
-                        ->where(function ($subQuery) use ($userId, $userName) {
-                            $subQuery->where('approval_by_id', $userId)
-                                ->orWhere('approval_by', $userName);
-                        });
-                });
-            });
+        $query = $this->pendingCertificatesQuery($assignment)
+            ->with(['client', 'standard', 'accreditationBody']);
 
         if (!empty($userInput)) {
             $query->where(function ($q) use ($userInput) {
@@ -1226,39 +1244,99 @@ class CertificateController extends Controller
 
     public function importExportView()
     {
-        if (!Auth::check()) {
-            return redirect()->route('certificate.search');
-        }
 
         return view('imports-exports');
     }
 
     public function export()
     {
-        if (Auth::check()) {
-            $today = Carbon::now()->format('d-m-Y');
-            $fileName = 'TUV Austria BIC BA Certificate DB on ' . $today . '.xlsx';
+        $today = Carbon::now()->format('d-m-Y');
+        $fileName = 'TUV Austria BIC BA Certificate DB on ' . $today . '.xlsx';
 
-            return Excel::download(new CertificateExport, $fileName);
-        }
+        $this->activityLog->record(
+            'export.completed',
+            'export',
+            null,
+            'BA certificate data was exported.',
+            ['file_name' => $fileName]
+        );
 
-        return redirect()->route('certificate.search');
+        return Excel::download(new CertificateExport, $fileName);
     }
 
-    public function import()
+    public function import(Request $request)
     {
-        if (Auth::check()) {
-            Excel::import(new CertificateImport, request()->file('file'));
-            return redirect('/dashboard')->with('success', 'BA certificate data imported successfully.');
-        }
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv|max:20480',
+        ]);
 
-        return redirect()->route('certificate.search');
+        Excel::import(new CertificateImport, $request->file('file'));
+
+        $this->activityLog->record(
+            'import.completed',
+            'import',
+            null,
+            'BA certificate data was imported.',
+            ['file_name' => $request->file('file')->getClientOriginalName()]
+        );
+
+        return redirect('/dashboard')->with('success', 'BA certificate data imported successfully.');
     }
     /*
     |--------------------------------------------------------------------------
     | Date Calculation Helper
     |--------------------------------------------------------------------------
     */
+
+    private function validatedSelectedCertificateIds(Request $request): array
+    {
+        $validated = $request->validate([
+            'certificate_ids' => 'required|array|min:1|max:500',
+            'certificate_ids.*' => 'required|integer|distinct|exists:certification_certificates,id',
+        ]);
+
+        return array_map('intval', $validated['certificate_ids']);
+    }
+
+    private function softDeleteCertificate(CertificationCertificate $certificate, User $user): void
+    {
+        if ($certificate->certificate_number) {
+            $certificate->certificate_number .= ' (Deleted)';
+        }
+
+        $certificate->status = 'Deleted';
+        $certificate->deleted_by = $user->name;
+        $certificate->deleted_by_id = $user->id;
+        $certificate->reviewed_at = null;
+        $certificate->approved_at = null;
+        $certificate->updated_by = $user->name;
+        $certificate->updated_by_id = $user->id;
+        $certificate->updated_at = Carbon::now();
+        $certificate->save();
+        $certificate->delete();
+    }
+
+    private function pendingCertificatesQuery(?string $assignment)
+    {
+        $userId = Auth::id();
+
+        if ($assignment === 'review' && $userId) {
+            return CertificationCertificate::assignedForReview($userId);
+        }
+
+        if ($assignment === 'approval' && $userId) {
+            return CertificationCertificate::assignedForApproval($userId);
+        }
+
+        if ($assignment === 'mine' && $userId) {
+            return CertificationCertificate::assignedToUser($userId);
+        }
+
+        return CertificationCertificate::where(function ($query) {
+            $query->whereIn('status', ['Pending Review', 'Pending'])
+                ->orWhereIn('status', ['Pending Approval', 'Reviewed']);
+        });
+    }
 
     private function calculateCycleDates($initialAuditCompletionDate, $certificateExpiryDate)
     {
