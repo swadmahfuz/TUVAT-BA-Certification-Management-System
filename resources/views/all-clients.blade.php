@@ -62,6 +62,7 @@
                         <td>
                             <div class="table-actions">
                                 <a href="{{ route('client.view', $client->id) }}" target="_blank" title="View"><i class="fa-solid fa-circle-info"></i></a>
+                                @canMutate
                                 <a href="{{ route('client.edit', $client->id) }}" target="_blank" title="Edit"><i class="fa-solid fa-pen-to-square"></i></a>
                                 <a href="{{ route('certificate.addForClient', $client->id) }}" title="Add certificate"><i class="fa-solid fa-plus"></i></a>
                                 <form action="{{ route('client.delete', $client->id) }}" method="POST" class="d-inline">
@@ -71,6 +72,7 @@
                                         <i class="fa-solid fa-trash"></i>
                                     </button>
                                 </form>
+                                @endcanMutate
                             </div>
                         </td>
                     </tr>

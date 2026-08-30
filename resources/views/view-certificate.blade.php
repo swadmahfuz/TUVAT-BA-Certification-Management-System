@@ -133,6 +133,7 @@
                             </div>
                         @endif
 
+                        @canMutate
                         <form method="POST" action="{{ route('certificate.uploadPdf', $certificate->id) }}" enctype="multipart/form-data">
                             @csrf
 
@@ -143,6 +144,7 @@
                                 <i class="fa-solid fa-upload me-1"></i> Upload PDF
                             </button>
                         </form>
+                        @endcanMutate
                     </div>
                 </div>
             </div>
@@ -234,6 +236,7 @@
 
             <div class="section-title">Audit Reports</div>
 
+            @canMutate
             <form method="POST" action="{{ route('auditReport.upload', $certificate->id) }}" enctype="multipart/form-data" class="mb-3">
                 @csrf
 
@@ -281,6 +284,7 @@
                     </div>
                 </div>
             </form>
+            @endcanMutate
 
             <div class="table-container">
                 <table class="table table-striped">
@@ -335,6 +339,7 @@
                 <div class="col-md-3"><div class="info-box"><b>Updated At:</b><br>{{ $certificate->updated_at ? \Carbon\Carbon::parse($certificate->updated_at)->format('d-m-Y h:i A') : 'N/A' }}</div></div>
             </div>
 
+            @canMutate
             <div class="row mt-3">
                 <div class="col-md-3">
                     @if(Auth::id() == $certificate->review_by_id && $certificate->status == 'Pending Review')
@@ -374,6 +379,7 @@
                     </form>
                 </div>
             </div>
+            @endcanMutate
 
     </div>
 </section>

@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Exports\CertificateExport;
 use App\Imports\CertificateImport;
+use App\Http\Requests\LoginRequest;
+use App\Jobs\ProcessCertificateImportJob;
 use App\Models\CertificationAccreditationBody;
 use App\Models\CertificationAuditReport;
 use App\Models\CertificationCertificate;
@@ -12,6 +14,7 @@ use App\Models\CertificationStandard;
 use App\Models\User;
 use App\Services\ActivityLogService;
 use App\Services\DashboardService;
+use App\Services\PermissionService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -63,20 +66,19 @@ class CertificateController extends Controller
     |--------------------------------------------------------------------------
     */
 
-    public function addCredentials(Request $request)
+    public function addCredentials(LoginRequest $request)
     {
         $credentials = $request->only('email', 'password');
-        $email = $credentials['email'] ?? null;
+        $email = $credentials['email'];
 
-        if ($email) {
-            $existing = User::where('email', $email)->first();
+        $existing = User::where('email', $email)->first();
 
-            if ($existing && !$existing->isActive()) {
-                return redirect('/admin')->with('error', 'Your account has been deactivated. Contact an administrator.');
-            }
+        if ($existing && !$existing->isActive()) {
+            return redirect('/admin')->with('error', 'Your account has been deactivated. Contact an administrator.');
         }
 
         if (Auth::attempt($credentials)) {
+            $request->session()->regenerate();
             $user = Auth::user();
 
             if (!$user->hasVerifiedEmail()) {
@@ -90,6 +92,14 @@ class CertificateController extends Controller
 
             return redirect('/dashboard')->with('success', 'Thank You for authorizing. Please proceed.');
         }
+
+        $this->activityLog->record(
+            'auth.failed',
+            'auth',
+            $existing?->id,
+            'Failed login attempt for ' . $email . '.',
+            ['email' => $email]
+        );
 
         return redirect('/admin')->with('error', 'You entered the wrong credentials');
     }
@@ -110,24 +120,6 @@ class CertificateController extends Controller
             $dashboardService->data(),
             compact('certificates')
         ));
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Users
-    |--------------------------------------------------------------------------
-    */
-
-    public function showAllUsers()
-    {
-        $users = User::with('departmentRelation')
-            ->withCount([
-                'certificationCertificatesCreated as certificates_created_count',
-                'certificationCertificatesReviewed as certificates_reviewed_count',
-                'certificationCertificatesApproved as certificates_approved_count',
-            ])->orderBy('name')->get();
-
-        return view('all-users', compact('users'));
     }
 
     /*
@@ -408,6 +400,9 @@ class CertificateController extends Controller
 
     public function editCertificate($id)
     {
+        if (!app(PermissionService::class)->canMutate()) {
+            abort(403, 'You do not have permission to edit certificates.');
+        }
 
         $certificate = CertificationCertificate::findOrFail($id);
         $clients = CertificationClient::orderBy('client_name')->get();
@@ -1144,7 +1139,7 @@ class CertificateController extends Controller
     {
 
         $perPage = 100;
-        $userInput = $request->input('userInput', '');
+        $userInput = (string) ($request->input('userInput') ?? '');
 
         $query = CertificationCertificate::with(['client', 'standard', 'accreditationBody']);
 
@@ -1185,7 +1180,7 @@ class CertificateController extends Controller
     {
 
         $perPage = 100;
-        $userInput = $request->input('userInput', '');
+        $userInput = (string) ($request->input('userInput') ?? '');
 
         $query = CertificationCertificate::onlyTrashed()->with(['client', 'standard', 'accreditationBody']);
 
@@ -1210,7 +1205,7 @@ class CertificateController extends Controller
     public function liveSearchPending(Request $request)
     {
         $perPage = 100;
-        $userInput = $request->input('userInput', '');
+        $userInput = (string) ($request->input('userInput') ?? '');
         $assignment = $request->input('assignment');
 
         $query = $this->pendingCertificatesQuery($assignment)
@@ -1270,6 +1265,24 @@ class CertificateController extends Controller
             'file' => 'required|file|mimes:xlsx,xls,csv|max:20480',
         ]);
 
+        $originalName = $request->file('file')->getClientOriginalName();
+
+        if (config('queue.default') !== 'sync') {
+            $storedPath = $request->file('file')->store('imports');
+
+            ProcessCertificateImportJob::dispatch(
+                $storedPath,
+                $originalName,
+                Auth::id(),
+                Auth::user()->name
+            );
+
+            return back()->with(
+                'success',
+                'Certificate import has been queued. Check the activity log when processing completes.'
+            );
+        }
+
         Excel::import(new CertificateImport, $request->file('file'));
 
         $this->activityLog->record(
@@ -1277,7 +1290,7 @@ class CertificateController extends Controller
             'import',
             null,
             'BA certificate data was imported.',
-            ['file_name' => $request->file('file')->getClientOriginalName()]
+            ['file_name' => $originalName]
         );
 
         return redirect('/dashboard')->with('success', 'BA certificate data imported successfully.');

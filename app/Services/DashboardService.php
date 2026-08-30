@@ -7,11 +7,25 @@ use App\Models\CertificationCertificate;
 use App\Models\CertificationClient;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class DashboardService
 {
     public function data(): array
+    {
+        $ttl = config('cvs.cache_ttl.dashboard', 300);
+        $userId = Auth::id() ?? 0;
+
+        return Cache::remember(
+            'cvs.dashboard.' . config('cvs.app_key') . '.' . $userId,
+            $ttl,
+            fn () => $this->buildData()
+        );
+    }
+
+    private function buildData(): array
     {
         $today = Carbon::today();
         $next90Days = Carbon::today()->addDays(90);
@@ -104,37 +118,41 @@ class DashboardService
 
     private function monthlyIssues(): array
     {
-        $months = collect(range(11, 1))->map(function ($monthsAgo) {
+        $months = collect(range(11, 0))->map(function ($monthsAgo) {
             return now()->startOfMonth()->subMonths($monthsAgo);
-        })->push(now()->startOfMonth());
+        });
 
         $start = $months->first()->format('Y-m-d');
-        $counts = CertificationCertificate::whereNotNull('certificate_issue_date')
+
+        $driver = DB::connection()->getDriverName();
+        $monthExpression = $driver === 'sqlite'
+            ? "strftime('%Y-%m', certificate_issue_date)"
+            : "DATE_FORMAT(certificate_issue_date, '%Y-%m')";
+
+        $counts = CertificationCertificate::query()
+            ->whereNotNull('certificate_issue_date')
             ->where('certificate_issue_date', '>=', $start)
-            ->get(['certificate_issue_date'])
-            ->groupBy(function ($certificate) {
-                try {
-                    return Carbon::parse($certificate->certificate_issue_date)->format('Y-m');
-                } catch (\Throwable $exception) {
-                    return 'invalid';
-                }
-            })
-            ->map->count();
+            ->selectRaw($monthExpression . ' as month_key, COUNT(*) as total')
+            ->groupBy('month_key')
+            ->pluck('total', 'month_key');
 
         return [
             'labels' => $months->map->format('M')->all(),
             'values' => $months->map(function ($month) use ($counts) {
-                return $counts->get($month->format('Y-m'), 0);
+                return (int) $counts->get($month->format('Y-m'), 0);
             })->all(),
         ];
     }
 
     private function recentActivities()
     {
-        if (!Schema::hasTable('certification_activity_logs')) {
+        $table = config('cvs.app_key', 'certification') . '_activity_logs';
+
+        if (!Schema::hasTable($table)) {
             return collect();
         }
 
         return ActivityLog::latest('created_at')->limit(6)->get();
     }
 }
+

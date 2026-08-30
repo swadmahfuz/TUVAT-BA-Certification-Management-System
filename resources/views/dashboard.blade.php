@@ -9,12 +9,14 @@
         <p>Welcome back, {{ auth()->user()->name }}.</p>
     </div>
     <div class="d-flex flex-wrap gap-2">
+        @canMutate
         <a class="btn btn-success btn-sm" href="{{ route('client.add') }}">
             <i class="fa-solid fa-building me-1"></i> Add Client
         </a>
         <a class="btn btn-primary btn-sm" href="{{ route('certificate.add') }}">
             <i class="fa-solid fa-plus me-1"></i> Add Certificate
         </a>
+        @endcanMutate
     </div>
 </div>
 
@@ -117,16 +119,23 @@
     <section class="admin-card">
         <div class="admin-card-header">
             <h2>Recent Activities</h2>
+            @superAdmin
             <a class="btn btn-outline-primary btn-sm" href="{{ route('activity-log.index') }}">View all</a>
+            @endsuperAdmin
         </div>
         <div class="admin-card-body">
             <ul class="activity-list">
                 @forelse($recentActivities as $activity)
+                    @php
+                        $sourceApp = $activity->properties['source_app'] ?? null;
+                        $apps = config('cvs.apps', []);
+                        $sourceLabel = $sourceApp ? ($apps[$sourceApp] ?? $sourceApp) : null;
+                    @endphp
                     <li class="activity-item">
                         <span class="activity-dot"><i class="fa-solid fa-clock-rotate-left"></i></span>
                         <div class="activity-text">
                             <p>{{ $activity->description }}</p>
-                            <time>{{ $activity->created_at->diffForHumans() }}</time>
+                            <time>{{ $activity->created_at->diffForHumans() }}@if($sourceLabel) · {{ $sourceLabel }}@endif</time>
                         </div>
                     </li>
                 @empty
@@ -224,6 +233,7 @@ $(function () {
     var deleteBase = @json(url('/delete-certificate'));
     var reviewBase = @json(url('/review-certificate'));
     var approveBase = @json(url('/approve-certificate'));
+    var canMutate = @json(auth()->check() && app(\App\Services\PermissionService::class)->canMutate());
 
     function escapeHtml(value) {
         return $('<div>').text(value == null ? '' : value).html();
@@ -264,12 +274,14 @@ $(function () {
                     var canReview = d.status === 'Pending Review' && Number(d.review_by_id) === Number(currentUserId);
                     var canApprove = d.status === 'Pending Approval' && Number(d.approval_by_id) === Number(currentUserId);
                     var actions = '<div class="table-actions">' +
-                        '<a href="' + viewBase + '/' + d.id + '" target="_blank" title="View"><i class="fa-solid fa-circle-info"></i></a>' +
-                        '<a href="' + editBase + '/' + d.id + '" target="_blank" title="Edit"><i class="fa-solid fa-pen-to-square"></i></a>' +
-                        postButton(deleteBase + '/' + d.id, 'Delete', 'fa-solid fa-trash', 'Delete this certificate?', true, 'DELETE') +
-                        (canReview ? postButton(reviewBase + '/' + d.id, 'Review', 'fa-solid fa-thumbs-up', 'Mark as reviewed?') : '') +
-                        (canApprove ? postButton(approveBase + '/' + d.id, 'Approve', 'fa-solid fa-check', 'Mark as approved?') : '') +
-                        '</div>';
+                        '<a href="' + viewBase + '/' + d.id + '" target="_blank" title="View"><i class="fa-solid fa-circle-info"></i></a>';
+                    if (canMutate) {
+                        actions += '<a href="' + editBase + '/' + d.id + '" target="_blank" title="Edit"><i class="fa-solid fa-pen-to-square"></i></a>' +
+                            postButton(deleteBase + '/' + d.id, 'Delete', 'fa-solid fa-trash', 'Delete this certificate?', true, 'DELETE') +
+                            (canReview ? postButton(reviewBase + '/' + d.id, 'Review', 'fa-solid fa-thumbs-up', 'Mark as reviewed?') : '') +
+                            (canApprove ? postButton(approveBase + '/' + d.id, 'Approve', 'fa-solid fa-check', 'Mark as approved?') : '');
+                    }
+                    actions += '</div>';
 
                     html += '<tr>' +
                         '<td>' + (i + 1 + (res.data.current_page - 1) * res.data.per_page) + '</td>' +

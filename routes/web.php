@@ -44,7 +44,7 @@ Route::get('/login', function () {
 })->name('login');
 
 Route::post('/login/addCredentials', [CertificateController::class, 'addCredentials'])
-    ->middleware('guest')
+    ->middleware(['guest', 'throttle:5,1'])
     ->name('certificate.login');
 
 // --- Authenticated Routes ---
@@ -67,22 +67,29 @@ Route::middleware(['auth', 'user.active'])->group(function () {
             Route::get('/users/{user}/edit', [UserManagementController::class, 'edit'])->name('users.edit');
             Route::put('/users/{user}', [UserManagementController::class, 'update'])->name('users.update');
             Route::post('/users/{user}/send-password-reset', [UserManagementController::class, 'sendPasswordReset'])->name('users.send-password-reset');
-            Route::get('/users/{user}/permissions', [UserManagementController::class, 'editPermissions'])->name('users.permissions.edit');
-            Route::post('/users/{user}/permissions', [UserManagementController::class, 'updatePermissions'])->name('users.permissions.update');
+            Route::post('/users/{user}/resend-verification', [UserManagementController::class, 'resendVerification'])->name('users.resend-verification');
+        });
+
+        Route::middleware('super.admin')->group(function () {
+            Route::get('/activity-log', [ActivityLogController::class, 'index'])->name('activity-log.index');
         });
 
         Route::middleware('app.access')->group(function () {
             Route::get('/dashboard', [CertificateController::class, 'getDashboard'])->name('dashboard');
 
             Route::get('/clients', [CertificateController::class, 'getAllClients'])->name('clients');
-            Route::get('/add-client', [CertificateController::class, 'addClient'])->name('client.add');
             Route::get('/view-client/{id}', [CertificateController::class, 'viewClient'])->name('client.view');
-            Route::get('/edit-client/{id}', [CertificateController::class, 'editClient'])->name('client.edit');
 
-            Route::get('/add-certificate', [CertificateController::class, 'addCertificate'])->name('certificate.add');
-            Route::get('/add-certificate/{clientId}', [CertificateController::class, 'addCertificate'])->name('certificate.addForClient');
             Route::get('/view-certificate/{id}', [CertificateController::class, 'viewCertificate'])->name('certificate.view');
-            Route::get('/edit-certificate/{id}', [CertificateController::class, 'editCertificate'])->name('certificate.edit');
+
+            Route::middleware('app.mutate')->group(function () {
+                Route::get('/add-client', [CertificateController::class, 'addClient'])->name('client.add');
+                Route::get('/edit-client/{id}', [CertificateController::class, 'editClient'])->name('client.edit');
+                Route::get('/add-certificate', [CertificateController::class, 'addCertificate'])->name('certificate.add');
+                Route::get('/add-certificate/{clientId}', [CertificateController::class, 'addCertificate'])->name('certificate.addForClient');
+                Route::get('/edit-certificate/{id}', [CertificateController::class, 'editCertificate'])->name('certificate.edit');
+                Route::get('/imports-exports', [CertificateController::class, 'importExportView'])->name('importsExports');
+            });
 
             Route::get('/pending-certificates', [CertificateController::class, 'getPendingCertificates'])->name('pendingCertificates');
             Route::get('/upcoming-audits', [CertificateController::class, 'upcomingAudits'])->name('upcomingAudits');
@@ -97,13 +104,9 @@ Route::middleware(['auth', 'user.active'])->group(function () {
             Route::get('/manage-standards', [CertificateController::class, 'manageStandards'])->name('standards.manage');
             Route::get('/manage-accreditation-bodies', [CertificateController::class, 'manageAccreditationBodies'])->name('accreditationBodies.manage');
 
-            Route::get('/imports-exports', [CertificateController::class, 'importExportView'])->name('importsExports');
-
             Route::get('/live-search', [CertificateController::class, 'liveSearch'])->name('liveSearch');
             Route::get('/live-search-pending', [CertificateController::class, 'liveSearchPending'])->name('liveSearchPending');
             Route::get('/live-search-deleted', [CertificateController::class, 'liveSearchDeleted'])->name('liveSearchDeleted');
-
-            Route::get('/activity-log', [ActivityLogController::class, 'index'])->name('activity-log.index');
 
             Route::middleware('app.mutate')->group(function () {
                 Route::post('/add-client', [CertificateController::class, 'createClient'])->name('client.create');
