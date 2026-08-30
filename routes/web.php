@@ -61,7 +61,6 @@ Route::middleware(['auth', 'user.active'])->group(function () {
             Route::post('/departments/{department}', [DepartmentController::class, 'update'])->name('departments.update');
             Route::post('/departments/{department}/toggle', [DepartmentController::class, 'toggleStatus'])->name('departments.toggle');
 
-            Route::get('/users', [UserManagementController::class, 'index'])->name('users.index');
             Route::get('/users/create', [UserManagementController::class, 'create'])->name('users.create');
             Route::post('/users', [UserManagementController::class, 'store'])->name('users.store');
             Route::get('/users/{user}/edit', [UserManagementController::class, 'edit'])->name('users.edit');
@@ -76,6 +75,8 @@ Route::middleware(['auth', 'user.active'])->group(function () {
 
         Route::middleware('app.access')->group(function () {
             Route::get('/dashboard', [CertificateController::class, 'getDashboard'])->name('dashboard');
+
+            Route::get('/admin/users', [UserManagementController::class, 'index'])->name('admin.users.index');
 
             Route::get('/clients', [CertificateController::class, 'getAllClients'])->name('clients');
             Route::get('/view-client/{id}', [CertificateController::class, 'viewClient'])->name('client.view');

@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\Schema;
 
 class DashboardService
 {
+    public function __construct(private CertificateFilterService $certificateFilters)
+    {
+    }
+
     public function data(): array
     {
         $ttl = config('cvs.cache_ttl.dashboard', 300);
@@ -30,19 +34,15 @@ class DashboardService
         $today = Carbon::today();
         $next90Days = Carbon::today()->addDays(90);
 
-        $total = CertificationCertificate::count();
+        $baseQuery = CertificationCertificate::query();
+        $total = (clone $baseQuery)->count();
         $pendingReview = CertificationCertificate::pendingReview()->count();
         $pendingApproval = CertificationCertificate::pendingApproval()->count();
-        $expired = CertificationCertificate::approved()
-            ->whereNotNull('certificate_expiry_date')
-            ->whereDate('certificate_expiry_date', '<', $today)
-            ->count();
-        $approved = CertificationCertificate::approved()
-            ->where(function ($query) use ($today) {
-                $query->whereNull('certificate_expiry_date')
-                    ->orWhereDate('certificate_expiry_date', '>=', $today);
-            })
-            ->count();
+        $expired = $this->certificateFilters->countExpired(clone $baseQuery);
+        $approved = $this->certificateFilters->countApproved(clone $baseQuery);
+        $expiring30 = $this->certificateFilters->countExpiringWithin(clone $baseQuery, 30);
+        $expiring60 = $this->certificateFilters->countExpiringWithin(clone $baseQuery, 60);
+        $expiring90 = $this->certificateFilters->countExpiringWithin(clone $baseQuery, 90);
 
         $statusCounts = [
             'Approved' => $approved,
@@ -60,6 +60,9 @@ class DashboardService
                 'pending_review' => $pendingReview,
                 'pending_approval' => $pendingApproval,
                 'expired' => $expired,
+                'expiring_30' => $expiring30,
+                'expiring_60' => $expiring60,
+                'expiring_90' => $expiring90,
                 'total_clients' => CertificationClient::count(),
                 'active_certificates' => CertificationCertificate::where('certificate_status', 'Active')->count(),
                 'upcoming_surveillance_1' => CertificationCertificate::whereBetween('surveillance_1_due_date', [$today, $next90Days])->count(),

@@ -13,6 +13,7 @@ use App\Models\CertificationClient;
 use App\Models\CertificationStandard;
 use App\Models\User;
 use App\Services\ActivityLogService;
+use App\Services\CertificateFilterService;
 use App\Services\DashboardService;
 use App\Services\PermissionService;
 use Carbon\Carbon;
@@ -769,17 +770,20 @@ class CertificateController extends Controller
         return view('upcoming-audits', compact('certificates'));
     }
 
-    public function expiredCertificates()
+    public function expiredCertificates(Request $request, CertificateFilterService $filterService)
     {
+        $filter = $request->query('filter', 'expired');
+        $column = $filterService->expiryColumn();
 
-        $today = Carbon::today();
+        $query = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
+            ->orderBy($column, 'ASC');
 
-        $certificates = CertificationCertificate::with(['client', 'standard', 'accreditationBody'])
-            ->whereDate('certificate_expiry_date', '<', $today)
-            ->orderBy('certificate_expiry_date', 'ASC')
-            ->paginate(100);
+        $filterService->applyFilter($query, $filter);
 
-        return view('expired-certificates', compact('certificates'));
+        $certificates = $query->paginate(100)->withQueryString();
+        $filterLabels = $filterService->filterLabels($filter);
+
+        return view('expired-certificates', compact('certificates', 'filter', 'filterLabels'));
     }
 
     /*

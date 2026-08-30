@@ -9,14 +9,24 @@
         <p>Welcome back, {{ auth()->user()->name }}.</p>
     </div>
     <div class="d-flex flex-wrap gap-2">
-        @canMutate
-        <a class="btn btn-success btn-sm" href="{{ route('client.add') }}">
-            <i class="fa-solid fa-building me-1"></i> Add Client
-        </a>
-        <a class="btn btn-primary btn-sm" href="{{ route('certificate.add') }}">
-            <i class="fa-solid fa-plus me-1"></i> Add Certificate
-        </a>
-        @endcanMutate
+        <x-admin.disabled-action
+            permission="mutate"
+            :href="route('client.add')"
+            :message="\App\Services\PermissionService::deniedMessage()"
+            variant="button"
+            class="btn-success btn-sm"
+            icon="fa-building">
+            Add Client
+        </x-admin.disabled-action>
+        <x-admin.disabled-action
+            permission="mutate"
+            :href="route('certificate.add')"
+            :message="\App\Services\PermissionService::deniedMessage()"
+            variant="button"
+            class="btn-primary btn-sm"
+            icon="fa-plus">
+            Add Certificate
+        </x-admin.disabled-action>
     </div>
 </div>
 
@@ -34,7 +44,7 @@
 
 <div class="stats-grid">
     <x-admin.stat-card label="Total Clients" :value="$stats['total_clients']" icon="fa-building" color="cyan" meta="Registered clients" :href="route('clients')" />
-    <x-admin.stat-card label="Total Certificates" :value="$stats['total']" icon="fa-file-circle-check" color="blue" meta="All records" />
+    <x-admin.stat-card label="Total Certificates" :value="$stats['total']" icon="fa-file-circle-check" color="blue" meta="All records" :href="route('dashboard') . '#all-certificates'" />
     <x-admin.stat-card label="Active Certificates" :value="$stats['active_certificates']" icon="fa-check" color="green" meta="Certificate status active" />
     <x-admin.stat-card label="Pending Review" :value="$stats['pending_review']" icon="fa-clock" color="orange" :meta="$percentages['Pending Review'].'% of total'" :href="route('pendingCertificates', ['assignment' => 'review'])" />
     <x-admin.stat-card label="Pending Approval" :value="$stats['pending_approval']" icon="fa-pen" color="purple" :meta="$percentages['Pending Approval'].'% of total'" :href="route('pendingCertificates', ['assignment' => 'approval'])" />
@@ -57,7 +67,10 @@
     <x-admin.stat-card label="Upcoming Surveillance 1" :value="$stats['upcoming_surveillance_1']" icon="fa-calendar-day" color="cyan" meta="Next 90 days" :href="route('upcomingAudits')" />
     <x-admin.stat-card label="Upcoming Surveillance 2" :value="$stats['upcoming_surveillance_2']" icon="fa-calendar-week" color="blue" meta="Next 90 days" :href="route('upcomingAudits')" />
     <x-admin.stat-card label="Upcoming Recertification" :value="$stats['upcoming_recertification']" icon="fa-arrows-rotate" color="orange" meta="Next 90 days" :href="route('upcomingAudits')" />
-    <x-admin.stat-card label="Expired Certificates" :value="$stats['expired']" icon="fa-circle-xmark" color="red" :meta="$percentages['Expired'].'% of total'" :href="route('expiredCertificates')" />
+    <x-admin.stat-card label="Expired Certificates" :value="$stats['expired']" icon="fa-circle-xmark" color="red" :meta="$percentages['Expired'].'% of total'" :href="route('expiredCertificates', ['filter' => 'expired'])" />
+    <x-admin.stat-card label="Expiring in 30 days" :value="$stats['expiring_30']" icon="fa-hourglass-half" color="orange" meta="Approved, expiry within 30 days" :href="route('expiredCertificates', ['filter' => 'expiring_30'])" />
+    <x-admin.stat-card label="Expiring in 60 days" :value="$stats['expiring_60']" icon="fa-hourglass-half" color="purple" meta="Approved, expiry within 60 days" :href="route('expiredCertificates', ['filter' => 'expiring_60'])" />
+    <x-admin.stat-card label="Expiring in 90 days" :value="$stats['expiring_90']" icon="fa-hourglass-half" color="cyan" meta="Approved, expiry within 90 days" :href="route('expiredCertificates', ['filter' => 'expiring_90'])" />
     <x-admin.stat-card label="Within Grace Period" :value="$stats['expired_within_grace']" icon="fa-hourglass-half" color="orange" meta="Expired but in grace" />
     <x-admin.stat-card label="Beyond Grace Period" :value="$stats['expired_beyond_grace']" icon="fa-ban" color="red" meta="Grace period ended" />
 </div>
@@ -146,7 +159,7 @@
     </section>
 </div>
 
-<section class="admin-card mt-3">
+<section class="admin-card mt-3" id="all-certificates">
     <div class="admin-card-header">
         <h2>All BA Certification Records</h2>
         <div class="toolbar">

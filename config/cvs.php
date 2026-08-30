@@ -24,4 +24,8 @@ return [
         'dashboard' => (int) env('CVS_DASHBOARD_CACHE_TTL', 300),
         'permissions' => (int) env('CVS_PERMISSIONS_CACHE_TTL', 900),
     ],
+
+    'certificate_filters' => [
+        'expiry_column' => 'certificate_expiry_date',
+    ],
 ];

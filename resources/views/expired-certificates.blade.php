@@ -3,21 +3,28 @@
 @section('title', 'Expired Certificates')
 
 @section('content')
-<div class="page-heading"><div><h1>Expired Certificates</h1></div></div>
+<div class="page-heading">
+    <div>
+        <h1>{{ $filterLabels['title'] ?? 'Expired Certificates' }}</h1>
+        <p>{{ $filterLabels['subtitle'] ?? 'Certificates with an expiry date in the past.' }}</p>
+    </div>
+</div>
 
 <section class="admin-card">
     <div class="admin-card-body">
 
+@if(($filter ?? 'expired') === 'expired')
 <div class="alert alert-danger" style="font-size: 12px;">
                 This page shows BA certificates where the certificate expiry date has already passed.
                 Records may still be within the 6-month grace period or beyond the grace period.
             </div>
+@endif
 
             <div class="table-container">
                 <table class="table table-striped">
                     <thead>
                         <th colspan="14" style="text-align: center; font-weight: bold; font-size: 1.5em;">
-                            Expired Certificate Records
+                            {{ $filterLabels['title'] ?? 'Expired Certificate Records' }}
                         </th>
 
                         <tr>
@@ -111,9 +118,11 @@
                                         <i class="fa-solid fa-circle-info" title="View Certificate"></i>
                                     </a>
 
+                                    @canMutate
                                     <a href="{{ route('certificate.edit', $certificate->id) }}" target="_blank">
                                         <i class="fa-solid fa-pen-to-square" title="Edit Certificate"></i>
                                     </a>
+                                    @endcanMutate
 
                                     @if($certificate->client)
                                         <a href="{{ route('client.view', $certificate->client->id) }}" target="_blank">
@@ -125,7 +134,7 @@
                         @empty
                             <tr>
                                 <td colspan="14" class="text-center">
-                                    No expired BA certificate records found.
+                                    No matching BA certificate records found.
                                 </td>
                             </tr>
                         @endforelse

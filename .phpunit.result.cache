@@ -1,0 +1,1 @@
+{"version":1,"defects":{"Tests\\Feature\\PermissionServiceTest::test_super_admin_can_mutate_and_access_all_apps":4,"Tests\\Feature\\PermissionServiceTest::test_view_only_user_cannot_mutate":4},"times":{"Tests\\Feature\\PermissionServiceTest::test_super_admin_can_mutate_and_access_all_apps":0.149,"Tests\\Feature\\PermissionServiceTest::test_view_only_user_cannot_mutate":0.007}}
